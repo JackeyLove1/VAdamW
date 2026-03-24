@@ -60,6 +60,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: widening the four-layer model also exceeded the total runtime budget once evaluation was included. The fixed evaluation cost on this GPU leaves very little headroom beyond the current `DEPTH=4`, `ASPECT_RATIO=64` baseline.
 
+### `eafbe84` larger device batch
+
+- Result: no valid summary
+- Status: crash
+- Notes: increasing `DEVICE_BATCH_SIZE` to `16` and `TOTAL_BATCH_SIZE` to `8192` did not solve the wall-clock issue. The run reached the end of training but still failed to produce a final summary within the allowed runtime, so it cannot replace the existing baseline.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
