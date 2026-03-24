@@ -84,6 +84,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: replacing full gradient history with per-matrix RMS-difference statistics fixed the throughput collapse, but total wall-clock still crossed the 10 minute limit before a final summary was printed. This approximation is much closer to viable, but still not acceptable under the current runtime rule.
 
+### `1ed83f4` AdamW gradvar damping only
+
+- Result: no valid summary
+- Status: crash
+- Notes: even restricting gradient-variation damping to the AdamW parameter groups still slowed the run enough to miss the overall runtime target. The current fused step implementation is not a good host for this idea without a different systems-level formulation.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
