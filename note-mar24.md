@@ -48,6 +48,12 @@ Branch: `autoresearch/mar24`
 - Status: incomplete
 - Notes: this run combined a lower embedding LR with lightweight AdamW-side gradvar on top of the stronger `DEPTH=4` baseline. It was interrupted externally before `val_bpb` was printed, so it is not considered a validated result.
 
+### `fb8e9c9` depth 6
+
+- Result: no valid summary
+- Status: crash
+- Notes: `DEPTH=6` completed the training budget but final evaluation pushed total wall-clock past the 10 minute limit. This confirms that `DEPTH=4` is near the practical upper bound unless evaluation cost is reduced elsewhere.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
