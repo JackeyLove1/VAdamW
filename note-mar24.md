@@ -72,6 +72,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: replacing `SSSL` with `LLLL` increased runtime enough that the run again missed the overall wall-clock constraint. For this GPU budget, partial local attention appears necessary.
 
+### `5e9992e` scalar-gradvar optimizer variant
+
+- Result: `val_bpb=1.748301`, `memory_gb=0.9`
+- Status: discard
+- Notes: the optimizer idea ran end-to-end, but the first Muon-side implementation still imposed too much overhead. Training speed collapsed to roughly `1.9M` tokens in the five-minute budget, so the worse metric is confounded by severe throughput loss rather than a clean optimizer comparison.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
