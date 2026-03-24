@@ -90,6 +90,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: even restricting gradient-variation damping to the AdamW parameter groups still slowed the run enough to miss the overall runtime target. The current fused step implementation is not a good host for this idea without a different systems-level formulation.
 
+### `b19f340` group-level gradvar LR gating
+
+- Result: `val_bpb=1.750228`, `memory_gb=0.8`
+- Status: discard
+- Notes: moving the idea fully outside the fused kernels solved the runtime problem, but the optimizer behavior degraded badly. The group-level gate is cheap enough to test quickly, yet at this strength it over-damps learning and does not preserve the useful dynamics of the baseline.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
