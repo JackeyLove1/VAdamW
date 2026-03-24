@@ -346,11 +346,16 @@ class GPT(nn.Module):
         dmodel_lr_scale = (model_dim / 768) ** -0.5
         print(f"Scaling AdamW LRs by 1/sqrt({model_dim}/768) = {dmodel_lr_scale:.6f}")
         param_groups = [
-            dict(kind='adamw', params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=embedding_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale, betas=adam_betas,
+                 beta3=GRADVAR_BETA, gradvar_rho=GRADVAR_RHO, eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=embedding_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas,
+                 beta3=GRADVAR_BETA, gradvar_rho=GRADVAR_RHO, eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas,
+                 beta3=GRADVAR_BETA, gradvar_rho=GRADVAR_RHO, eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas,
+                 beta3=GRADVAR_BETA, gradvar_rho=GRADVAR_RHO, eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95),
+                 beta3=GRADVAR_BETA, gradvar_rho=GRADVAR_RHO, eps=1e-10, weight_decay=0.0),
         ]
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
@@ -401,13 +406,18 @@ polar_express_coeffs = [
 ]
 
 @maybe_compile(dynamic=False, fullgraph=True)
-def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_t, eps_t, wd_t):
+def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, prev_grad, exp_avg_diff_sq,
+                     step_t, lr_t, beta1_t, beta2_t, beta3_t, rho_t, eps_t, wd_t):
     p.mul_(1 - lr_t * wd_t)
+    grad_delta = grad - prev_grad
     exp_avg.lerp_(grad, 1 - beta1_t)
     exp_avg_sq.lerp_(grad.square(), 1 - beta2_t)
+    exp_avg_diff_sq.lerp_(grad_delta.square(), 1 - beta3_t)
+    prev_grad.copy_(grad)
     bias1 = 1 - beta1_t ** step_t
     bias2 = 1 - beta2_t ** step_t
-    denom = (exp_avg_sq / bias2).sqrt() + eps_t
+    bias3 = 1 - beta3_t ** step_t
+    denom = (exp_avg_sq / bias2 + rho_t * (exp_avg_diff_sq / bias3)).sqrt() + eps_t
     step_size = lr_t / bias1
     p.add_(exp_avg / denom, alpha=-step_size)
 
@@ -461,6 +471,8 @@ class MuonAdamW(torch.optim.Optimizer):
         self._adamw_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_beta1_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_beta2_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
+        self._adamw_beta3_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
+        self._adamw_rho_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_eps_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._muon_momentum_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
@@ -478,16 +490,24 @@ class MuonAdamW(torch.optim.Optimizer):
                 state['step'] = 0
                 state['exp_avg'] = torch.zeros_like(p)
                 state['exp_avg_sq'] = torch.zeros_like(p)
+                state['prev_grad'] = torch.zeros_like(p)
+                state['exp_avg_diff_sq'] = torch.zeros_like(p)
             state['step'] += 1
             self._adamw_step_t.fill_(state['step'])
             self._adamw_lr_t.fill_(group['lr'])
             self._adamw_beta1_t.fill_(group['betas'][0])
             self._adamw_beta2_t.fill_(group['betas'][1])
+            self._adamw_beta3_t.fill_(group.get('beta3', group['betas'][1]))
+            self._adamw_rho_t.fill_(group.get('gradvar_rho', 0.0))
             self._adamw_eps_t.fill_(group['eps'])
             self._adamw_wd_t.fill_(group['weight_decay'])
-            adamw_step_fused(p, grad, state['exp_avg'], state['exp_avg_sq'],
-                            self._adamw_step_t, self._adamw_lr_t, self._adamw_beta1_t,
-                            self._adamw_beta2_t, self._adamw_eps_t, self._adamw_wd_t)
+            adamw_step_fused(
+                p, grad, state['exp_avg'], state['exp_avg_sq'],
+                state['prev_grad'], state['exp_avg_diff_sq'],
+                self._adamw_step_t, self._adamw_lr_t, self._adamw_beta1_t,
+                self._adamw_beta2_t, self._adamw_beta3_t, self._adamw_rho_t,
+                self._adamw_eps_t, self._adamw_wd_t,
+            )
 
     def _step_muon(self, group):
         params = group['params']
@@ -535,7 +555,7 @@ WINDOW_PATTERN = "SSSL" # sliding window pattern: L=full, S=half context
 
 # Optimization
 TOTAL_BATCH_SIZE = 2**12 # ~4K tokens per optimizer step
-EMBEDDING_LR = 0.6      # learning rate for token embeddings (Adam)
+EMBEDDING_LR = 0.45     # learning rate for token embeddings (Adam)
 UNEMBEDDING_LR = 0.004  # learning rate for lm_head (Adam)
 MATRIX_LR = 0.04        # learning rate for matrix parameters (Muon)
 SCALAR_LR = 0.5         # learning rate for per-layer scalars (Adam)
@@ -544,6 +564,8 @@ ADAM_BETAS = (0.8, 0.95) # Adam beta1, beta2
 WARMUP_RATIO = 0.0      # fraction of time budget for LR warmup
 WARMDOWN_RATIO = 0.5    # fraction of time budget for LR warmdown
 FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
+GRADVAR_BETA = 0.95     # EMA decay for squared gradient differences in AdamW groups
+GRADVAR_RHO = 0.02      # strength of gradient-variation damping
 
 # Model size
 DEPTH = 4               # number of transformer layers
