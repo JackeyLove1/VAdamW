@@ -66,6 +66,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: increasing `DEVICE_BATCH_SIZE` to `16` and `TOTAL_BATCH_SIZE` to `8192` did not solve the wall-clock issue. The run reached the end of training but still failed to produce a final summary within the allowed runtime, so it cannot replace the existing baseline.
 
+### `3aef2f4` full attention at depth 4
+
+- Result: no valid summary
+- Status: crash
+- Notes: replacing `SSSL` with `LLLL` increased runtime enough that the run again missed the overall wall-clock constraint. For this GPU budget, partial local attention appears necessary.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
