@@ -96,6 +96,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: moving the idea fully outside the fused kernels solved the runtime problem, but the optimizer behavior degraded badly. The group-level gate is cheap enough to test quickly, yet at this strength it over-damps learning and does not preserve the useful dynamics of the baseline.
 
+### `15abf40` mild Muon-only gradvar gate
+
+- Result: no valid summary
+- Status: crash
+- Notes: restricting the cheap group-level gate to Muon only and dropping the damping strength still failed the wall-clock requirement. Training throughput looked acceptable, but the run again stalled long enough in the final stage that it could not be counted as a valid experiment.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
