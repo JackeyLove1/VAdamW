@@ -529,7 +529,7 @@ class MuonAdamW(torch.optim.Optimizer):
 
 # Model architecture
 USE_FA3 = False         # True: Flash Attention 3 via kernels (download on first use); False: PyTorch SDPA
-ASPECT_RATIO = 96       # model_dim = depth * ASPECT_RATIO
+ASPECT_RATIO = 64       # model_dim = depth * ASPECT_RATIO
 HEAD_DIM = 128          # target head dimension for attention
 WINDOW_PATTERN = "SSSL" # sliding window pattern: L=full, S=half context
 

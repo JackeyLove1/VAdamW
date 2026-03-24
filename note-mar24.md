@@ -54,6 +54,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: `DEPTH=6` completed the training budget but final evaluation pushed total wall-clock past the 10 minute limit. This confirms that `DEPTH=4` is near the practical upper bound unless evaluation cost is reduced elsewhere.
 
+### `2f3ac24` wider depth 4 (`ASPECT_RATIO=96`)
+
+- Result: no valid summary
+- Status: crash
+- Notes: widening the four-layer model also exceeded the total runtime budget once evaluation was included. The fixed evaluation cost on this GPU leaves very little headroom beyond the current `DEPTH=4`, `ASPECT_RATIO=64` baseline.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
