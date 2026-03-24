@@ -401,17 +401,6 @@ polar_express_coeffs = [
 ]
 
 @maybe_compile(dynamic=False, fullgraph=True)
-def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_t, eps_t, wd_t):
-    p.mul_(1 - lr_t * wd_t)
-    exp_avg.lerp_(grad, 1 - beta1_t)
-    exp_avg_sq.lerp_(grad.square(), 1 - beta2_t)
-    bias1 = 1 - beta1_t ** step_t
-    bias2 = 1 - beta2_t ** step_t
-    denom = (exp_avg_sq / bias2).sqrt() + eps_t
-    step_size = lr_t / bias1
-    p.add_(exp_avg / denom, alpha=-step_size)
-
-@maybe_compile(dynamic=False, fullgraph=True)
 def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momentum_buffer,
                     momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim):
     # Nesterov momentum
@@ -456,13 +445,6 @@ class MuonAdamW(torch.optim.Optimizer):
 
     def __init__(self, param_groups):
         super().__init__(param_groups, defaults={})
-        # 0-D CPU tensors to avoid torch.compile recompilation when values change
-        self._adamw_step_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_beta1_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_beta2_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_eps_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._muon_momentum_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._muon_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._muon_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
@@ -472,22 +454,35 @@ class MuonAdamW(torch.optim.Optimizer):
         for p in group['params']:
             if p.grad is None:
                 continue
-            grad = p.grad
+            grad = p.grad.float()
             state = self.state[p]
             if not state:
                 state['step'] = 0
-                state['exp_avg'] = torch.zeros_like(p)
-                state['exp_avg_sq'] = torch.zeros_like(p)
+                state['exp_avg'] = torch.zeros_like(grad)
+                state['exp_avg_sq'] = torch.zeros_like(grad)
+                state['prev_grad'] = torch.zeros_like(grad)
+                state['exp_avg_diff_sq'] = torch.zeros_like(grad)
             state['step'] += 1
-            self._adamw_step_t.fill_(state['step'])
-            self._adamw_lr_t.fill_(group['lr'])
-            self._adamw_beta1_t.fill_(group['betas'][0])
-            self._adamw_beta2_t.fill_(group['betas'][1])
-            self._adamw_eps_t.fill_(group['eps'])
-            self._adamw_wd_t.fill_(group['weight_decay'])
-            adamw_step_fused(p, grad, state['exp_avg'], state['exp_avg_sq'],
-                            self._adamw_step_t, self._adamw_lr_t, self._adamw_beta1_t,
-                            self._adamw_beta2_t, self._adamw_eps_t, self._adamw_wd_t)
+            exp_avg = state['exp_avg']
+            exp_avg_sq = state['exp_avg_sq']
+            prev_grad = state['prev_grad']
+            exp_avg_diff_sq = state['exp_avg_diff_sq']
+            beta1, beta2 = group['betas']
+            beta3 = group.get('beta3', beta2)
+            exp_avg.lerp_(grad, 1 - beta1)
+            exp_avg_sq.lerp_(grad.square(), 1 - beta2)
+            grad_delta = grad - prev_grad
+            exp_avg_diff_sq.lerp_(grad_delta.square(), 1 - beta3)
+            prev_grad.copy_(grad)
+            bias1 = 1 - beta1 ** state['step']
+            bias2 = 1 - beta2 ** state['step']
+            bias3 = 1 - beta3 ** state['step']
+            var_term = exp_avg_diff_sq / bias3
+            gate = group.get("gradvar_gate", 1.0)
+            denom = (exp_avg_sq / bias2 + gate * group.get('gradvar_rho', 0.0) * var_term).sqrt().add_(group['eps'])
+            update = (exp_avg / bias1) / denom
+            p.mul_(1 - group['lr'] * group['weight_decay'])
+            p.add_(update.to(dtype=p.dtype), alpha=-group['lr'])
 
     def _step_muon(self, group):
         params = group['params']
@@ -544,6 +539,9 @@ ADAM_BETAS = (0.8, 0.95) # Adam beta1, beta2
 WARMUP_RATIO = 0.0      # fraction of time budget for LR warmup
 WARMDOWN_RATIO = 0.5    # fraction of time budget for LR warmdown
 FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
+GRADVAR_BETA = 0.99
+GRADVAR_RHO = 0.002
+GRADVAR_START = 0.6
 
 # Model size
 DEPTH = 4               # number of transformer layers
@@ -657,6 +655,7 @@ while True:
     muon_weight_decay = get_weight_decay(progress)
     for group in optimizer.param_groups:
         group["lr"] = group["initial_lr"] * lrm
+        group["gradvar_gate"] = 1.0 if progress >= GRADVAR_START else 0.0
         if group['kind'] == 'muon':
             group["momentum"] = muon_momentum
             group["weight_decay"] = muon_weight_decay
