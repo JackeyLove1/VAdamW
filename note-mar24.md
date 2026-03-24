@@ -78,6 +78,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: the optimizer idea ran end-to-end, but the first Muon-side implementation still imposed too much overhead. Training speed collapsed to roughly `1.9M` tokens in the five-minute budget, so the worse metric is confounded by severe throughput loss rather than a clean optimizer comparison.
 
+### `0abe953` RMS-diff gradvar damping for Muon
+
+- Result: no valid summary
+- Status: crash
+- Notes: replacing full gradient history with per-matrix RMS-difference statistics fixed the throughput collapse, but total wall-clock still crossed the 10 minute limit before a final summary was printed. This approximation is much closer to viable, but still not acceptable under the current runtime rule.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
