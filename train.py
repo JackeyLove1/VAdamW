@@ -349,8 +349,10 @@ class GPT(nn.Module):
             dict(kind='adamw', params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind='adamw', params=embedding_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind='adamw', params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
+            dict(kind='gradvar_adamw', params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas,
+                 beta3=GRADVAR_BETA, gradvar_rho=GRADVAR_RHO, eps=1e-10, weight_decay=0.0),
+            dict(kind='gradvar_adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95),
+                 beta3=GRADVAR_BETA, gradvar_rho=GRADVAR_RHO, eps=1e-10, weight_decay=0.0),
         ]
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
@@ -489,6 +491,38 @@ class MuonAdamW(torch.optim.Optimizer):
                             self._adamw_step_t, self._adamw_lr_t, self._adamw_beta1_t,
                             self._adamw_beta2_t, self._adamw_eps_t, self._adamw_wd_t)
 
+    def _step_gradvar_adamw(self, group):
+        for p in group['params']:
+            if p.grad is None:
+                continue
+            grad = p.grad.float()
+            state = self.state[p]
+            if not state:
+                state['step'] = 0
+                state['exp_avg'] = torch.zeros_like(grad)
+                state['exp_avg_sq'] = torch.zeros_like(grad)
+                state['prev_grad'] = torch.zeros_like(grad)
+                state['exp_avg_diff_sq'] = torch.zeros_like(grad)
+            state['step'] += 1
+            exp_avg = state['exp_avg']
+            exp_avg_sq = state['exp_avg_sq']
+            prev_grad = state['prev_grad']
+            exp_avg_diff_sq = state['exp_avg_diff_sq']
+            beta1, beta2 = group['betas']
+            beta3 = group.get('beta3', beta2)
+            exp_avg.lerp_(grad, 1 - beta1)
+            exp_avg_sq.lerp_(grad.square(), 1 - beta2)
+            grad_delta = grad - prev_grad
+            exp_avg_diff_sq.lerp_(grad_delta.square(), 1 - beta3)
+            prev_grad.copy_(grad)
+            bias1 = 1 - beta1 ** state['step']
+            bias2 = 1 - beta2 ** state['step']
+            bias3 = 1 - beta3 ** state['step']
+            denom = (exp_avg_sq / bias2 + group.get('gradvar_rho', 0.0) * (exp_avg_diff_sq / bias3)).sqrt().add_(group['eps'])
+            update = (exp_avg / bias1) / denom
+            p.mul_(1 - group['lr'] * group['weight_decay'])
+            p.add_(update.to(dtype=p.dtype), alpha=-group['lr'])
+
     def _step_muon(self, group):
         params = group['params']
         if not params:
@@ -520,6 +554,8 @@ class MuonAdamW(torch.optim.Optimizer):
         for group in self.param_groups:
             if group['kind'] == 'adamw':
                 self._step_adamw(group)
+            elif group['kind'] == 'gradvar_adamw':
+                self._step_gradvar_adamw(group)
             elif group['kind'] == 'muon':
                 self._step_muon(group)
 
@@ -544,6 +580,8 @@ ADAM_BETAS = (0.8, 0.95) # Adam beta1, beta2
 WARMUP_RATIO = 0.0      # fraction of time budget for LR warmup
 WARMDOWN_RATIO = 0.5    # fraction of time budget for LR warmdown
 FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
+GRADVAR_BETA = 0.99
+GRADVAR_RHO = 0.002
 
 # Model size
 DEPTH = 4               # number of transformer layers
