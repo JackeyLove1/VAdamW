@@ -144,6 +144,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: using gradient-variation statistics only to reduce Muon momentum preserved throughput, but validation quality still dropped notably. This means the variation signal is not merely failing as a preconditioner; it also fails as a simple momentum-control signal in this recipe.
 
+### `93f2f68` variation-controlled Muon weight decay
+
+- Result: `val_bpb=1.740790`, `memory_gb=0.8`
+- Status: discard
+- Notes: using the same variation signal only to attenuate Muon weight decay also failed to improve the model. This weakens the case that the issue is specific to momentum; even as a pure regularization-control signal, the current variation statistic remains unhelpful here.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
