@@ -138,6 +138,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: delaying the Muon-style head mixing until the final 10\% of training and shrinking the mix coefficient still pushed the run over the total wall-clock limit. The idea became operationally safer, but not safe enough to count as a valid run on this setup.
 
+### `848a4ab` variation-controlled Muon momentum
+
+- Result: `val_bpb=1.741060`, `memory_gb=0.8`
+- Status: discard
+- Notes: using gradient-variation statistics only to reduce Muon momentum preserved throughput, but validation quality still dropped notably. This means the variation signal is not merely failing as a preconditioner; it also fails as a simple momentum-control signal in this recipe.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
