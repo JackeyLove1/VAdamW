@@ -1,92 +1,192 @@
-# autoresearch
+# 基于梯度变化统计的变分优化器实验总结
 
-![teaser](progress.png)
+## 1. 研究目标
 
-*One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
+本轮实验的目标不是重新设计完整训练系统，而是在现有 `train.py` 的单卡、固定 5 分钟训练预算设定下，验证一个更聚焦的问题：
 
-The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069).
+> 梯度变化统计是否能够作为一种有用的“变分信号”，在不破坏原有优化框架的前提下改善验证 `val_bpb`？
 
-## How it works
+这里的“变分”并不是指严格的变分推断实现，而是把梯度变化幅度视为一种不确定性或局部曲率变化的近似信号，用来调节更新幅度、更新方向或训练调度。
 
-The repo is deliberately kept small and only really has three files that matter:
+---
 
-- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
-- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
+## 2. 核心公式与方法设计
 
-By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
+### 2.1 主方法：GradVar-AdamW
 
-If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
+最初设想是在 AdamW 的二阶统计之外，再显式维护一项梯度变化统计：
 
-## Quick start
-
-**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
-
-```bash
-
-# 1. Install uv project manager (if you don't already have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Install dependencies
-uv sync
-
-# 3. Download data and train tokenizer (one-time, ~2 min)
-uv run prepare.py
-
-# 4. Manually run a single training experiment (~5 min)
-uv run train.py
+```math
+d_t = \beta_3 d_{t-1} + (1-\beta_3)(g_t-g_{t-1})^2
 ```
 
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+然后把它作为额外阻尼项加入 AdamW 分母：
 
-## Running the agent
-
-Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
-
-```
-Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
-```
-
-The `program.md` file is essentially a super lightweight "skill".
-
-## Project structure
-
-```
-prepare.py      — constants, data prep + runtime utilities (do not modify)
-train.py        — model, optimizer, training loop (agent modifies this)
-program.md      — agent instructions
-pyproject.toml  — dependencies
+```math
+\theta_{t+1}
+=
+(1-\eta\lambda)\theta_t
+- \eta \frac{\hat m_t}{\sqrt{\hat v_t + \rho \hat d_t} + \epsilon}
 ```
 
-## Design choices
+其中：
 
-- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
-- **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
-- **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+- `m_t` 是一阶动量
+- `v_t` 是二阶动量
+- `d_t` 是梯度变化的指数滑动平均
+- `rho` 控制变化统计对更新的抑制强度
 
-## Platform support
+这个设计的出发点是：当相邻步梯度变化剧烈时，说明局部优化地形不稳定，更新应更保守。
 
-This code currently requires that you have a single NVIDIA GPU. In principle it is quite possible to support CPU, MPS and other platforms but this would also bloat the code. I'm not 100% sure that I want to take this on personally right now. People can reference (or have their agents reference) the full/parent nanochat repository that has wider platform support and shows the various solutions (e.g. a Flash Attention 3 kernels fallback implementation, generic device support, autodetection, etc.), feel free to create forks or discussions for other platforms and I'm happy to link to them here in the README in some new notable forks section or etc.
+### 2.2 变体思路
 
-Seeing as there seems to be a lot of interest in tinkering with autoresearch on much smaller compute platforms than an H100, a few extra words. If you're going to try running autoresearch on smaller computers (Macbooks etc.), I'd recommend one of the forks below. On top of this, here are some recommendations for how to tune the defaults for much smaller models for aspiring forks:
+在主公式无效或开销过大后，又尝试了几类更弱的表达：
 
-1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
-2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
-3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
-4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
-5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
-6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
-7. You'll want to lower `TOTAL_BATCH_SIZE` a lot, but keep it powers of 2, e.g. down to `2**14` (~16K) or so even, hard to tell.
+1. **AdamW-side damping**
+   只在 AdamW 参数组上引入 `d_t`，不动 Muon 主干。
 
-I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
+2. **Muon-side scalar damping**
+   不保存整块梯度历史，只保存每个矩阵的 RMS 变化统计，用它调节 Muon 更新。
 
-## Notable forks
+3. **Multiplicative gate**
+   不把变化统计放进分母，而是把它变成一个接近 `1` 的门控因子，轻微缩放更新。
 
-- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)
-- [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (MacOS)
-- [jsegov/autoresearch-win-rtx](https://github.com/jsegov/autoresearch-win-rtx) (Windows)
-- [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD)
+4. **Hybrid Muon-AdamW**
+   对 `lm_head` 这种大矩阵参数，把 AdamW 方向与 Muon 风格的正交化方向做小比例混合。
 
-## License
+5. **Meta-scheduler variants**
+   不直接改更新公式，而是让变化统计只去调节：
+   - Muon momentum
+   - Muon weight decay
+   - Muon learning rate
 
-MIT
+这些变体的共同目标是降低系统开销，并检验“梯度变化作为不确定性信号”本身是否有价值。
+
+---
+
+## 3. 实验设计
+
+### 3.1 固定实验环境
+
+- 数据与评估：由 `prepare.py` 固定，不做修改
+- 指标：`val_bpb`，越低越好
+- 时间预算：训练阶段固定 300 秒，整体实验超过约 10 分钟视为失败
+- 硬件：单张 NVIDIA 5060
+- 可改文件：仅 `train.py`
+
+### 3.2 对照方式
+
+实验分成两层：
+
+1. **容量基线**
+   先确认当前训练脚本的有效容量区间，避免把“模型太小”误判成“优化器不好”。
+
+2. **优化器实验**
+   在当前最好容量基线上，只替换或扩展优化器策略，比较同一时间预算内的 `val_bpb`。
+
+### 3.3 重要基线
+
+| commit | 设置 | val_bpb | 备注 |
+|---|---|---:|---|
+| `1c27729` | 原始基线 | 1.628552 | 深度过小，模型明显欠容量 |
+| `945c757` | `DEPTH=4` 基线 | 1.396539 | 当前最优有效结果 |
+
+`945c757` 说明本项目中最显著的提升首先来自容量修正，而不是优化器微调。
+
+---
+
+## 4. 关键实验结果
+
+### 4.1 与变分优化器直接相关的主要实验
+
+| commit | 方法 | 结果 | 状态 |
+|---|---|---:|---|
+| `50edbb7` | AdamW 参数组加入梯度变化阻尼 | 1.628637 | discard |
+| `5e9992e` | Muon-side scalar gradvar optimizer | 1.748301 | discard |
+| `b19f340` | group-level gradvar LR gating | 1.750228 | discard |
+| `b16bf22` | 重写后的 gated GradVar-AdamW | 1.759879 | discard |
+| `5fcdc09` | selective GradVar-AdamW groups | 1.749533 | discard |
+| `1a52dc2` | scalar-only GradVar-AdamW | 1.739078 | discard |
+| `646f016` | `lm_head` 上的弱 multiplicative gate | 1.749062 | discard |
+| `3ad3d92` | hybrid Muon-AdamW head optimizer | 1.750358 | discard |
+| `848a4ab` | variation-controlled Muon momentum | 1.741060 | discard |
+| `93f2f68` | variation-controlled Muon weight decay | 1.740790 | discard |
+| `ee08d20` | variation-controlled Muon learning rate | 1.738969 | discard |
+
+### 4.2 运行时失败但有信息量的实验
+
+| commit | 方法 | 状态 | 含义 |
+|---|---|---|---|
+| `fcd3a39` | Muon gradvar damping | crash | 逐元素历史状态导致吞吐崩塌 |
+| `0abe953` | Muon RMS-diff gradvar | crash | 吞吐恢复，但总墙钟仍超预算 |
+| `1ed83f4` | AdamW gradvar only | crash | 说明即使只作用于 AdamW 支路也可能破坏整体效率 |
+| `4e019bb` | late weak hybrid head optimizer | crash | 极弱混合仍难在总运行时约束内稳定完成 |
+
+---
+
+## 5. 实验观察
+
+### 5.1 当前配方下，梯度变化统计不是有用的优化信号
+
+无论采用哪种表达方式，`val_bpb` 都显著差于当前最好基线 `1.396539`。这表明在本任务上：
+
+- 梯度变化率并没有提供有效的“局部不确定性”信号
+- 把它转成阻尼、门控、方向混合或元调度，都会伤害训练
+
+### 5.2 负结果不只是系统实现问题
+
+最早的失败确实包含明显的系统代价：
+
+- 保存额外历史状态
+- 逐元素引入新统计
+- 影响 fused / compiled 路径
+
+但后续更弱、更轻的实验仍然失败：
+
+- 只作用在极小参数组
+- 只作用在 `lm_head`
+- 只调节 momentum / weight decay / learning rate
+
+这些实验的吞吐基本正常，但结果仍然变差。因此当前结论不能仅归因于“实现太慢”。
+
+### 5.3 Muon 的矩阵思想不能直接迁移
+
+Muon 在当前脚本里有效，说明矩阵参数确实适合结构化更新。但实验显示：
+
+- 直接混合 AdamW 与 Muon 的方向，不会自动变好
+- 把 variation statistic 作为 Muon 的外部控制量，也没有带来增益
+
+因此，“参考 Muon 的矩阵优化思路”本身是合理的，但当前这种参考方式并不成立。
+
+---
+
+## 6. 结论
+
+本轮实验给出了一个比较明确的负结果：
+
+> 在本仓库的固定 5 分钟训练预算、当前数据分布、模型规模和优化器配方下，基于梯度变化统计的变分优化器并没有带来正收益。
+
+更具体地说：
+
+1. 把 `(g_t-g_{t-1})^2` 作为额外阻尼项加入 AdamW 分母，效果显著变差。
+2. 把这一信号弱化为 gate、方向混合或元调度，结果仍然普遍劣于基线。
+3. 参考 Muon 的矩阵优化思想进行混合，也没有改善 `val_bpb`。
+4. 当前项目中真正有效的提升首先来自容量修正，而不是这一类优化器设计。
+
+当前最优有效结果仍然是：
+
+- `commit: 945c757`
+- setting: `DEPTH=4`
+- `val_bpb: 1.396539`
+
+---
+
+## 7. 下一步建议
+
+如果继续推进论文或实验，建议不要再围绕“梯度变化率”这一信号做微调，而应转向更不同的变分表达，例如：
+
+1. **基于梯度能量与参数能量比的先验控制**
+2. **对矩阵参数做低秩或谱范数层面的后验近似**
+3. **用 KL / 熵风格的简化正则控制 `lm_head` 或 embedding**
+
+也就是说，下一阶段如果还要坚持“变分法”路线，应该换信号，而不是继续修改同一个 `gradient variation` 统计量。
