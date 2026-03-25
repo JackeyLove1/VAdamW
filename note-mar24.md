@@ -102,6 +102,12 @@ Branch: `autoresearch/mar24`
 - Status: crash
 - Notes: restricting the cheap group-level gate to Muon only and dropping the damping strength still failed the wall-clock requirement. Training throughput looked acceptable, but the run again stalled long enough in the final stage that it could not be counted as a valid experiment.
 
+### `b16bf22` rewritten gated GradVar-AdamW
+
+- Result: `val_bpb=1.759879`, `memory_gb=0.9`
+- Status: discard
+- Notes: fully rewriting the AdamW branch and only activating gradient-variation damping in the second half of training still hurt both throughput and final quality. This suggests the current non-Muon parameter groups are too important to perturb with per-parameter history at this budget.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
