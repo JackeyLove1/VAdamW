@@ -114,6 +114,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: restricting GradVar-AdamW to the `lm_head` and scalar parameter groups preserved runtime, but still badly underperformed the baseline. The negative effect is therefore not just an embedding-state overhead issue; the update rule itself is misaligned with this setup.
 
+### `1a52dc2` scalar-only GradVar-AdamW
+
+- Result: `val_bpb=1.739078`, `memory_gb=0.8`
+- Status: discard
+- Notes: applying the variation-damped AdamW rule only to the tiny scalar parameter groups kept throughput almost intact, yet still hurt validation quality substantially. This is the cleanest evidence so far that the current gradient-variation damping rule is a poor fit for this training recipe, independent of systems overhead.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
