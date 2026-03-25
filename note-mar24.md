@@ -132,6 +132,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: blending AdamW with a Muon-style orthogonalized head update also failed to help. This suggests that simply importing matrix-direction structure from Muon is not enough; the mixture criterion itself is not aligned with what improves validation BPB here.
 
+### `4e019bb` late weak hybrid head optimizer
+
+- Result: no valid summary
+- Status: crash
+- Notes: delaying the Muon-style head mixing until the final 10\% of training and shrinking the mix coefficient still pushed the run over the total wall-clock limit. The idea became operationally safer, but not safe enough to count as a valid run on this setup.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
