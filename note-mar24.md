@@ -108,6 +108,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: fully rewriting the AdamW branch and only activating gradient-variation damping in the second half of training still hurt both throughput and final quality. This suggests the current non-Muon parameter groups are too important to perturb with per-parameter history at this budget.
 
+### `5fcdc09` selective GradVar-AdamW groups
+
+- Result: `val_bpb=1.749533`, `memory_gb=0.8`
+- Status: discard
+- Notes: restricting GradVar-AdamW to the `lm_head` and scalar parameter groups preserved runtime, but still badly underperformed the baseline. The negative effect is therefore not just an embedding-state overhead issue; the update rule itself is misaligned with this setup.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
