@@ -357,7 +357,6 @@ class GPT(nn.Module):
             param_groups.append(dict(
                 kind='muon', params=group_params, lr=matrix_lr,
                 momentum=0.95, ns_steps=5, beta2=0.95, weight_decay=weight_decay,
-                var_beta=VAR_LR_BETA, var_rho=VAR_LR_RHO, lr_floor=VAR_LR_FLOOR,
             ))
         optimizer = MuonAdamW(param_groups)
         for group in optimizer.param_groups:
@@ -469,17 +468,6 @@ class MuonAdamW(torch.optim.Optimizer):
         self._muon_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._muon_beta2_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
 
-    def _muon_variation_lr_scale(self, group, grad_rms):
-        prev = group.get("var_prev_rms", grad_rms)
-        ema = group.get("var_ema", 0.0)
-        diff_sq = (grad_rms - prev) ** 2
-        beta = group.get("var_beta", 0.99)
-        ema = beta * ema + (1 - beta) * diff_sq
-        group["var_prev_rms"] = grad_rms
-        group["var_ema"] = ema
-        scale = 1.0 / (1.0 + group.get("var_rho", 0.0) * ema)
-        return max(group.get("lr_floor", 0.9), scale)
-
     def _step_adamw(self, group):
         for p in group['params']:
             if p.grad is None:
@@ -517,10 +505,9 @@ class MuonAdamW(torch.optim.Optimizer):
         red_dim = -1 if shape[-2] >= shape[-1] else -2
         stacked_grads = torch.stack([p.grad for p in params])
         stacked_params = torch.stack(params)
-        grad_rms = stacked_grads.float().square().mean().sqrt().item()
         self._muon_momentum_t.fill_(group["momentum"])
         self._muon_beta2_t.fill_(group["beta2"] if group["beta2"] is not None else 0.0)
-        self._muon_lr_t.fill_(group["lr"] * self._muon_variation_lr_scale(group, grad_rms) * max(1.0, shape[-2] / shape[-1])**0.5)
+        self._muon_lr_t.fill_(group["lr"] * max(1.0, shape[-2] / shape[-1])**0.5)
         self._muon_wd_t.fill_(group["weight_decay"])
         muon_step_fused(stacked_grads, stacked_params,
                         state["momentum_buffer"], state["second_momentum_buffer"],
@@ -557,9 +544,6 @@ ADAM_BETAS = (0.8, 0.95) # Adam beta1, beta2
 WARMUP_RATIO = 0.0      # fraction of time budget for LR warmup
 WARMDOWN_RATIO = 0.5    # fraction of time budget for LR warmdown
 FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
-VAR_LR_BETA = 0.99
-VAR_LR_RHO = 0.10
-VAR_LR_FLOOR = 0.92
 
 # Model size
 DEPTH = 4               # number of transformer layers

@@ -150,6 +150,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: using the same variation signal only to attenuate Muon weight decay also failed to improve the model. This weakens the case that the issue is specific to momentum; even as a pure regularization-control signal, the current variation statistic remains unhelpful here.
 
+### `ee08d20` variation-controlled Muon learning rate
+
+- Result: `val_bpb=1.738969`, `memory_gb=0.8`
+- Status: discard
+- Notes: learning-rate modulation was the cleanest and most benign of the variation-controlled Muon schedulers, but it still degraded validation BPB materially. At this point the evidence is fairly consistent that this family of variation signals is not useful for the present five-minute training regime.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
