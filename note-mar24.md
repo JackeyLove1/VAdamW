@@ -120,6 +120,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: applying the variation-damped AdamW rule only to the tiny scalar parameter groups kept throughput almost intact, yet still hurt validation quality substantially. This is the cleanest evidence so far that the current gradient-variation damping rule is a poor fit for this training recipe, independent of systems overhead.
 
+### `646f016` mild multiplicative gradvar gate on `lm_head`
+
+- Result: `val_bpb=1.749062`, `memory_gb=0.8`
+- Status: discard
+- Notes: replacing denominator damping with a near-identity multiplicative gate on the `lm_head` update did not help. Runtime stayed healthy, but the result remained far worse than baseline, which argues against the usefulness of this gradient-variation signal even in a very weak form.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
