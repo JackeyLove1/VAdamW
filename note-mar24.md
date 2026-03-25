@@ -126,6 +126,12 @@ Branch: `autoresearch/mar24`
 - Status: discard
 - Notes: replacing denominator damping with a near-identity multiplicative gate on the `lm_head` update did not help. Runtime stayed healthy, but the result remained far worse than baseline, which argues against the usefulness of this gradient-variation signal even in a very weak form.
 
+### `3ad3d92` hybrid Muon-AdamW head optimizer
+
+- Result: `val_bpb=1.750358`, `memory_gb=0.8`
+- Status: discard
+- Notes: blending AdamW with a Muon-style orthogonalized head update also failed to help. This suggests that simply importing matrix-direction structure from Muon is not enough; the mixture criterion itself is not aligned with what improves validation BPB here.
+
 ## Current Direction
 
 - Keep `DEPTH=4` as the active baseline.
